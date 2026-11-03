@@ -679,7 +679,7 @@ function fitFrame(img, mono) {
   nat.width = img.width; nat.height = img.height; natX.putImageData(img, 0, 0);
   const k = Math.min(AW / img.width, VH / img.height);
   const w = Math.round(img.width * k), h = Math.round(img.height * k);
-  fitX.imageSmoothingEnabled = k < 1;
+  fitX.imageSmoothingEnabled = !(Number.isInteger(1 / k) || Number.isInteger(k));
   fitX.fillStyle = '#000'; fitX.fillRect(0, 0, AW, VH);
   fitX.drawImage(nat, Math.round((AW - w) / 2), Math.round((VH - h) / 2), w, h);
   const out = fitX.getImageData(0, 0, AW, VH);
@@ -756,6 +756,13 @@ async function dbAll() {
     });
   } catch (e) { return {}; }
 }
+// bundled default animation for preset 1 (Android app only: assets/clips/default.gif)
+fetch('clips/default.gif').then(r => r.ok ? r.blob() : null).then(async b => {
+  if (!b) return;
+  const save1 = S.preset;
+  await loadFileIntoSlot(1, b, 'DOLPHINS.gif', false);
+  S.preset = save1; renderPresets(); S.msg = '';
+}).catch(() => {});
 dbAll().then(async all => { for (const k of Object.keys(all)) { const v = all[k]; if (v?.blob) await loadFileIntoSlot(+k, v.blob, v.name, false); } if (!slots[S.preset] && S.preset > 2) S.preset = 1; renderPresets(); S.msg = ''; });
 
 // ---------- right panel ----------
@@ -853,7 +860,7 @@ function render() {
   s.setTransform(1, 0, 0, 1, 0, 0);
   s.fillStyle = '#000'; s.fillRect(0, 0, VW, VH);
   const sl = slots[S.preset];
-  if (S.preset === 1 || (S.preset > 2 && !sl)) { renderScene(); ditherSceneInto(animImg); s.putImageData(animImg, 0, 0); }
+  if ((S.preset === 1 && !sl) || (S.preset > 2 && !sl)) { renderScene(); ditherSceneInto(animImg); s.putImageData(animImg, 0, 0); }
   else if (S.preset === 2) drawSpectrum();
   else if (sl.disp) s.putImageData(sl.disp[sl.fi], 0, 0);
   else if (sl.kind === 'video' && sl.el.readyState >= 2 && sl.el.videoWidth) {
