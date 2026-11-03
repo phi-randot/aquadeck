@@ -21,7 +21,7 @@
     AndroidBridge.command(name, arg)    // "prev" | "next" | "playpause" | "volume" | "source"
   Without the bridge the page runs a demo with a simulated beat.
 
-  Presets: 1 = built-in dolphins, 2 = spectrum, 3–6 = your own clips
+  Presets 1–6: bundled clips (assets/clips/p1..p6.gif), replaceable via OPEN; DISP also reaches the spectrum
   (.lkd OEL animation files, animated GIFs, videos or images), kept in this browser.
 -->
 <style>
@@ -240,7 +240,7 @@
     <div class="mbox">
       <div class="mhead">AQUADECK SETUP <button id="mClose">✕</button></div>
       <div class="mrow"><span>Faceplate</span><div class="seg"><button data-skin="blue">Blue (P7600 style)</button><button data-skin="green">Green (P6400 style)</button></div></div>
-      <div class="mrow"><span>Load clips into preset</span><div class="seg" id="mSlots"></div></div>
+      <div class="mrow"><span>Replace clip on preset</span><div class="seg" id="mSlots"></div></div>
       <div class="mrow"><input id="mUrl" placeholder="Paste a GIF / .lkd link" style="flex:1;min-width:180px;background:#1b1f24;color:#e6e9ec;border:1px solid #343941;border-radius:6px;padding:8px 10px;font:inherit"><button id="mUrlGo">Load from link</button></div>
       <div class="mrow"><button id="mLoad">Load animation from this device…</button><button id="mAccess" class="app-only">Media access settings</button></div>
       <div class="msub">Carozerra clip library <small>— downloaded from github.com/youxufkhan/carozerra</small></div>
@@ -325,7 +325,7 @@ const S = { external: false, idx: 0, track: 1, source: 'TIDAL', artist: '', titl
 try {
   const sv = JSON.parse(localStorage.getItem('aquadeck2') || '{}');
   if (THEMES[sv.theme]) S.theme = sv.theme;
-  if (sv.preset >= 1 && sv.preset <= 6) S.preset = sv.preset;
+  if (sv.preset >= 0 && sv.preset <= 6) S.preset = sv.preset;
   if (sv.skin === 'green') S.skin = 'green';
 } catch (e) {}
 const save = () => { try { localStorage.setItem('aquadeck2', JSON.stringify({ theme: S.theme, preset: S.preset, skin: S.skin })); } catch (e) {} };
@@ -592,7 +592,7 @@ async function decodeLKD(buf) {
   for (let k = 0; k < count; k++) {
     const f = new ImageData(fw, fh);
     f.data.set(strip.data.subarray(k * fh * fw * 4, (k + 1) * fh * fw * 4));
-    frames.push(f);
+    frames.push(fitFrame(f, false));
   }
   return { frames, delays: frames.map(() => 60) };
 }
@@ -653,7 +653,7 @@ async function decodeGIF(buf) {
           canvas[o] = pal[c * 3]; canvas[o + 1] = pal[c * 3 + 1]; canvas[o + 2] = pal[c * 3 + 2]; canvas[o + 3] = 255;
         }
       }
-      frames.push(new ImageData(canvas.slice(), W, H));
+      frames.push(fitFrame(new ImageData(canvas.slice(), W, H), false));
       delays.push(Math.max(20, delay));
       if (disposal === 2) { for (let y = fy; y < Math.min(H, fy + fh); y++) for (let x = fx; x < Math.min(W, fx + fw); x++) { const o = (y * W + x) * 4; canvas[o] = canvas[o + 1] = canvas[o + 2] = 0; } }
       else if (disposal === 3 && backup) canvas.set(backup);
@@ -717,7 +717,7 @@ async function loadFileIntoSlot(n, blob, name, persist = true) {
       const bm = await createImageBitmap(blob);
       const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height;
       const x = c.getContext('2d'); x.drawImage(bm, 0, 0);
-      sl = { kind: 'image', frames: [x.getImageData(0, 0, bm.width, bm.height)], delays: [1000] };
+      sl = { kind: 'image', frames: [fitFrame(x.getImageData(0, 0, bm.width, bm.height), false)], delays: [1000] };
     }
   } catch (e) { flash('CANNOT READ ' + (sig.replace(/[^A-Za-z0-9]/g, '') || 'FILE') + ': ' + (e && e.message || e), 4); console.error(e); return false; }
   if (slots[n]?.el) slots[n].el.remove();
@@ -756,14 +756,21 @@ async function dbAll() {
     });
   } catch (e) { return {}; }
 }
-// bundled default animation for preset 1 (Android app only: assets/clips/default.gif)
-fetch('clips/default.gif').then(r => r.ok ? r.blob() : null).then(async b => {
-  if (!b) return;
-  const save1 = S.preset;
-  await loadFileIntoSlot(1, b, 'DOLPHINS.gif', false);
-  S.preset = save1; renderPresets(); S.msg = '';
-}).catch(() => {});
-dbAll().then(async all => { for (const k of Object.keys(all)) { const v = all[k]; if (v?.blob) await loadFileIntoSlot(+k, v.blob, v.name, false); } if (!slots[S.preset] && S.preset > 2) S.preset = 1; renderPresets(); S.msg = ''; });
+// bundled animations for presets 1–6 (Android app: assets/clips/p1.gif … p6.gif),
+// then any clips the user loaded themselves (they override the bundled ones)
+(async () => {
+  const keep = S.preset;
+  for (let n = 1; n <= 6; n++) {
+    try {
+      const r = await fetch('clips/p' + n + '.gif');
+      if (r.ok) await loadFileIntoSlot(n, await r.blob(), 'CLIP ' + n + '.gif', false);
+    } catch (e) {}
+  }
+  const all = await dbAll();
+  for (const k of Object.keys(all)) { const v = all[k]; if (v?.blob) await loadFileIntoSlot(+k, v.blob, v.name, false); }
+  S.preset = keep >= 1 && !slots[keep] ? 1 : keep;
+  renderPresets(); S.msg = '';
+})();
 
 // ---------- right panel ----------
 function txt(str, x, y, color) { s.fillStyle = color; s.fillText(str, Math.round(x), Math.round(y)); }
@@ -829,16 +836,22 @@ function drawSpectrum() {
 
 // ---------- presets UI ----------
 const presetsEl = document.getElementById('presets');
+function presetLabel(n) {
+  if (n === 0) return 'SPECTRUM';
+  const sl = slots[n];
+  if (!sl) return 'P' + n + ' DOLPHINS';
+  return /^CLIP \d/.test(sl.name) ? 'PRESET ' + n : 'P' + n + ' ' + sl.name.replace(/\.[^.]+$/, '');
+}
 function renderPresets() {
   presetsEl.innerHTML = '';
   for (let n = 1; n <= 6; n++) {
     const el = document.createElement('div');
-    el.className = 'preset' + (S.preset === n ? ' on' : '') + (n > 2 && !slots[n] ? ' empty' : '');
+    el.className = 'preset' + (S.preset === n ? ' on' : '') + (!slots[n] ? ' empty' : '');
     el.innerHTML = `<span>${n}</span><i></i>`;
     el.addEventListener('click', () => {
-      if (n > 2 && !slots[n]) { pickFor(n); return; }
+      if (!slots[n] && n > 1) { pickFor(n); return; }
       S.preset = n; save(); renderPresets();
-      flash(n === 1 ? 'P1 DOLPHINS' : n === 2 ? 'P2 SPECTRUM' : 'P' + n + ' ' + slots[n].name.replace(/\.[^.]+$/, ''), 1.6);
+      flash(presetLabel(n), 1.6);
     });
     presetsEl.appendChild(el);
   }
@@ -860,8 +873,8 @@ function render() {
   s.setTransform(1, 0, 0, 1, 0, 0);
   s.fillStyle = '#000'; s.fillRect(0, 0, VW, VH);
   const sl = slots[S.preset];
-  if ((S.preset === 1 && !sl) || (S.preset > 2 && !sl)) { renderScene(); ditherSceneInto(animImg); s.putImageData(animImg, 0, 0); }
-  else if (S.preset === 2) drawSpectrum();
+  if (S.preset === 0) drawSpectrum();
+  else if (!sl) { renderScene(); ditherSceneInto(animImg); s.putImageData(animImg, 0, 0); }
   else if (sl.disp) s.putImageData(sl.disp[sl.fi], 0, 0);
   else if (sl.kind === 'video' && sl.el.readyState >= 2 && sl.el.videoWidth) {
     const v = sl.el, k = Math.max(AW / v.videoWidth, VH / v.videoHeight);
@@ -887,9 +900,9 @@ requestAnimationFrame(frame);
 // ---------- controls ----------
 const on = (id, fn) => document.getElementById(id).addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); fn(); });
 function cyclePreset() {
-  const list = [1, 2, 3, 4, 5, 6].filter(n => n <= 2 || slots[n]);
+  const list = [1, 2, 3, 4, 5, 6].filter(n => n === 1 || slots[n]).concat([0]);
   S.preset = list[(list.indexOf(S.preset) + 1) % list.length]; save(); renderPresets();
-  flash(S.preset === 1 ? 'P1 DOLPHINS' : S.preset === 2 ? 'P2 SPECTRUM' : 'P' + S.preset + ' ' + slots[S.preset].name.replace(/\.[^.]+$/, ''), 1.6);
+  flash(presetLabel(S.preset), 1.6);
 }
 const prev = () => { if (send('prev')) return; if (S.pos > 3) S.pos = 0; else loadDemo(S.idx - 1); };
 const next = () => { if (send('next')) return; loadDemo(S.idx + 1); };
@@ -905,7 +918,7 @@ on('bIllum', () => {
 });
 on('bSrc', () => { if (send('source')) return; S.source = SOURCES[(SOURCES.indexOf(S.source) + 1) % SOURCES.length]; flash('SRC ' + S.source, 1.3); });
 on('bClip', () => {
-  let n = S.preset > 2 ? S.preset : [3, 4, 5, 6].find(k => !slots[k]) || 3;
+  let n = S.preset >= 1 ? S.preset : 1;
   pickFor(n);
 });
 
@@ -915,15 +928,15 @@ let target = 3;
 function renderMenu() {
   document.querySelectorAll('[data-skin]').forEach(b => b.classList.toggle('sel', b.dataset.skin === S.skin));
   const ms = document.getElementById('mSlots'); ms.innerHTML = '';
-  for (let n = 3; n <= 6; n++) {
+  for (let n = 1; n <= 6; n++) {
     const b = document.createElement('button');
-    b.textContent = n + (slots[n] ? ' · ' + slots[n].name.replace(/\.[^.]+$/, '').slice(0, 12) : ' · empty');
+    b.textContent = n + (slots[n] ? (/^CLIP \d/.test(slots[n].name) ? ' · built-in' : ' · ' + slots[n].name.replace(/\.[^.]+$/, '').slice(0, 12)) : ' · empty');
     b.className = n === target ? 'sel' : '';
     b.onclick = () => { target = n; renderMenu(); };
     ms.appendChild(b);
   }
 }
-on('bOpen', () => { target = S.preset > 2 ? S.preset : [3, 4, 5, 6].find(k => !slots[k]) || 3; renderMenu(); menu.hidden = false; });
+on('bOpen', () => { target = S.preset >= 1 ? S.preset : 1; renderMenu(); menu.hidden = false; });
 on('mClose', () => { menu.hidden = true; });
 menu.addEventListener('click', e => { if (e.target === menu) menu.hidden = true; });
 document.querySelectorAll('[data-skin]').forEach(b => b.addEventListener('click', () => {
