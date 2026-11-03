@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>AquaDeck – retro head unit display</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Barlow+Condensed:ital,wght@0,600;1,600;1,800&display=block" rel="stylesheet">
+<!--
+  AquaDeck — bridge API for the future Android wrapper (WebView)
+
+  Android -> page:
+    HeadUnit.setTrack({title, artist, source:"TIDAL", track:3, duration:215000, position:0})
+    HeadUnit.setPlaying(true|false)
+    HeadUnit.setPosition(positionMs, durationMs)
+    HeadUnit.setLevels([0..1, ...])     // spectrum bands if the phone allows audio capture
+    HeadUnit.beat(energy0to1)
+    HeadUnit.setVolume(0..40)
+  Page -> Android (JS interface "AndroidBridge"):
+    AndroidBridge.command(name, arg)    // "prev" | "next" | "playpause" | "volume" | "source"
+  Without the bridge the page runs a demo with a simulated beat.
+
+  Presets: 1 = built-in dolphins, 2 = spectrum, 3–6 = your own clips
+  (.lkd OEL animation files, animated GIFs, videos or images), kept in this browser.
+-->
+<style>
+  :root { --illum: 70,150,255; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    min-height: 100svh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 10px; gap: 12px; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 45%, #2a2d33 0%, #0c0d10 75%);
+    font-family: "Barlow Condensed", "Arial Narrow", Arial, sans-serif; color: #7d838b;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  }
+  .rotate { display: none; font-size: 14px; letter-spacing: .08em; }
+  @media (orientation: portrait) { .rotate { display: block; } }
+  .hint { margin: 0; font-size: 14px; letter-spacing: .03em; text-align: center; max-width: 920px; line-height: 1.4; }
+  @media (max-height: 470px) { .hint { display: none; } }
+
+  /* ---------- shell ---------- */
+  .unit {
+    container-type: inline-size;
+    width: min(98vw, 1150px, calc((100svh - 24px) * 2.7));
+    aspect-ratio: 2.7;
+    padding: 1.5cqw 1.8cqw;
+    border-radius: 6cqw / 12cqw;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 22%, rgba(0,0,0,0) 70%, rgba(0,0,0,.25)),
+      linear-gradient(90deg, #8c929a 0%, #d3d7dc 12%, #c2c6cb 50%, #d3d7dc 88%, #8c929a 100%);
+    box-shadow: inset 0 .25cqw .3cqw rgba(255,255,255,.9), inset 0 -.35cqw .6cqw rgba(0,0,0,.4),
+                0 0 0 1px #4b5057, 0 2.4cqw 4cqw rgba(0,0,0,.7);
+  }
+  .face {
+    height: 100%; position: relative;
+    border-radius: 4.2cqw / 9cqw;
+    padding: .9cqw;
+    background: linear-gradient(180deg, #b4b9bf, #7f858d 55%, #a7acb2);
+    box-shadow: inset 0 0 0 .2cqw #5d6269, inset 0 .5cqw .9cqw rgba(0,0,0,.35), 0 .15cqw 0 rgba(255,255,255,.7);
+  }
+  .panel {
+    height: 100%; position: relative;
+    border-radius: 3.4cqw / 8cqw;
+    background: linear-gradient(180deg, #1c1e22 0%, #0a0b0d 30%, #050506 100%);
+    box-shadow: inset 0 0 0 .18cqw #2e3136, inset 0 .4cqw 1cqw rgba(0,0,0,.9);
+    display: grid; grid-template-columns: 19% 1fr 19%;
+  }
+
+  /* ---------- wings with knobs ---------- */
+  .wing { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .wing .tag { position: absolute; font-weight: 600; font-size: 1.5cqw; letter-spacing: .04em; color: #e8ebee; line-height: 1; }
+  .knob { position: relative; width: 15.5cqw; aspect-ratio: 1; border-radius: 50%; touch-action: none; }
+  .knob .chrome {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: conic-gradient(from 210deg, #fbfcfd, #7f858d, #e4e7ea, #5f656d, #f2f4f6, #8a9098, #fbfcfd);
+    box-shadow: 0 .5cqw 1cqw rgba(0,0,0,.8), inset 0 0 0 .12cqw rgba(0,0,0,.4);
+  }
+  .knob .ring {
+    position: absolute; inset: 8%; border-radius: 50%;
+    background: radial-gradient(circle, rgba(var(--illum),1) 58%, rgba(var(--illum),.55) 66%, rgba(0,0,30,.9) 72%);
+    box-shadow: 0 0 1.4cqw rgba(var(--illum),.9), 0 0 .3cqw rgba(var(--illum),1);
+  }
+  .knob .disc {
+    position: absolute; inset: 15%; border-radius: 50%;
+    background:
+      radial-gradient(circle at 38% 30%, rgba(255,255,255,.85), rgba(255,255,255,0) 42%),
+      conic-gradient(from 30deg, rgba(255,255,255,.45), rgba(0,0,0,.12), rgba(255,255,255,.45), rgba(0,0,0,.12), rgba(255,255,255,.45)),
+      repeating-radial-gradient(circle, #c3c8cd 0 .12cqw, #a9afb6 .12cqw .24cqw);
+    box-shadow: inset 0 0 0 .15cqw #8b9199, inset 0 -.4cqw .7cqw rgba(0,0,0,.35), 0 0 .2cqw rgba(0,0,0,.6);
+  }
+  .knob .rotor { position: absolute; inset: 15%; border-radius: 50%; transition: transform .08s linear; pointer-events: none; }
+  .knob .dot { position: absolute; left: 50%; top: 7%; width: 6%; aspect-ratio: 1; transform: translateX(-50%); border-radius: 50%;
+               background: rgb(var(--illum)); box-shadow: 0 0 .6cqw rgb(var(--illum)); }
+  .knob .arrow { position: absolute; width: 11%; aspect-ratio: 1; border-radius: .3cqw; cursor: pointer;
+                 background: rgba(var(--illum),.95); box-shadow: 0 0 .7cqw rgba(var(--illum),1); }
+  .knob .arrow::after { content: ""; position: absolute; inset: -120%; }
+  .a-up { left: 44.5%; top: 21%; } .a-dn { left: 44.5%; bottom: 21%; }
+  .a-lt { top: 44.5%; left: 21%; } .a-rt { top: 44.5%; right: 21%; }
+  .knob .center { position: absolute; inset: 36%; border-radius: 50%; cursor: pointer; }
+  #knobL { cursor: grab; }
+
+  .cpill {
+    position: absolute; bottom: 6%; width: 10.5cqw; height: 2.5cqw; border-radius: 1.4cqw;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    background: radial-gradient(ellipse at 50% 25%, rgba(255,255,255,.95), rgba(var(--illum),.9) 75%);
+    box-shadow: 0 0 1cqw rgba(var(--illum),.75), inset 0 -.25cqw .3cqw rgba(0,0,40,.35);
+    color: #0d1f45; font-weight: 800; font-size: 1.5cqw; letter-spacing: .06em;
+  }
+  .cpill svg { height: 1.1cqw; fill: #0d1f45; }
+  .cpill.l { left: 16%; transform: skewX(18deg); } .cpill.r { right: 16%; transform: skewX(-18deg); }
+  .cpill span, .cpill svg { transform: skewX(0); }
+
+  .open { position: absolute; top: 6%; right: 16%; display: flex; align-items: center; gap: .6cqw; font-size: 1.3cqw; font-weight: 600; color: #d9dde1; letter-spacing: .06em; }
+  .open i { width: 2.3cqw; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #f4f6f8, #8a9098 70%); box-shadow: 0 .15cqw .3cqw rgba(0,0,0,.8); }
+
+  /* ---------- center ---------- */
+  .mid { display: flex; flex-direction: column; min-width: 0; padding: 1cqw 0 1.1cqw; }
+  .strip { display: flex; align-items: center; justify-content: space-between; height: 3.6cqw; padding: 0 1.2cqw;
+           border-radius: .5cqw; background: linear-gradient(#0e0f11, #050506); box-shadow: inset 0 0 0 .1cqw #2b2e33; }
+  .strip .lbl { font-style: italic; font-weight: 800; font-size: 1.85cqw; color: #f1f3f5; letter-spacing: .02em; }
+  .strip .lbl small { font-size: 1.25cqw; font-weight: 600; }
+  .badge {
+    padding: .35cqw 1.8cqw; border-radius: .6cqw;
+    background: linear-gradient(180deg, #f6f7f9, #9aa0a8 50%, #d7dade);
+    box-shadow: inset 0 0 0 .12cqw #50555c, 0 .15cqw .25cqw rgba(0,0,0,.8);
+    font-style: italic; font-weight: 800; font-size: 2.2cqw; letter-spacing: .1em; color: #1a1c20; line-height: 1;
+  }
+  .core { flex: 1; display: grid; grid-template-columns: 9% 1fr 9%; align-items: center; margin-top: 1cqw; }
+  .side { display: flex; flex-direction: column; align-items: center; gap: 1.6cqw; }
+  .sb { display: flex; flex-direction: column; align-items: center; gap: .4cqw; cursor: pointer; }
+  .sb span { font-size: 1.3cqw; font-weight: 600; color: #e6e9ec; letter-spacing: .04em; white-space: nowrap; }
+  .sb i {
+    width: 3.6cqw; height: 2.4cqw; border-radius: .9cqw;
+    background: radial-gradient(ellipse at 50% 28%, rgba(255,255,255,.95), rgba(var(--illum),.9) 72%);
+    box-shadow: 0 0 .9cqw rgba(var(--illum),.75), inset 0 -.25cqw .3cqw rgba(0,0,40,.35);
+  }
+  .sb:active i, .cpill:active, .preset:active { filter: brightness(.8); }
+  .bezel { background: #000; padding: .6cqw .8cqw; border-radius: .4cqw; box-shadow: inset 0 0 0 .12cqw #26292d; }
+  .screen { position: relative; aspect-ratio: 368 / 83; background: #000; overflow: hidden; cursor: pointer; }
+  .screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #glow { filter: blur(.28cqw); opacity: .85; mix-blend-mode: screen; pointer-events: none; }
+  .glass { position: absolute; inset: 0; pointer-events: none;
+           background: linear-gradient(170deg, rgba(255,255,255,.07) 0%, rgba(255,255,255,.015) 40%, transparent 41%); }
+  .under { display: flex; justify-content: space-between; align-items: center; padding: .5cqw 9.5% 0; }
+  .under .model { font-weight: 600; font-size: 1.45cqw; color: #e6e9ec; letter-spacing: .05em; }
+  .under .model b { margin-left: .6cqw; padding: 0 .4cqw; background: #e6e9ec; color: #111; border-radius: .2cqw; font-size: 1.2cqw; }
+  .under .logo { font-style: italic; font-weight: 800; font-size: 1.35cqw; color: #c9cdd2; letter-spacing: .12em; }
+
+  .presets { display: flex; gap: .55cqw; margin-top: .7cqw; padding: 0 2cqw; }
+  .preset { flex: 1; display: flex; flex-direction: column; align-items: center; gap: .35cqw; cursor: pointer; }
+  .preset span { font-weight: 600; font-size: 1.55cqw; color: #e6e9ec; line-height: 1; }
+  .preset i {
+    width: 100%; height: 1.5cqw; border-radius: .35cqw .35cqw .6cqw .6cqw;
+    background: linear-gradient(#f0fff4, #9fd9b1); box-shadow: 0 0 .5cqw rgba(150,255,180,.45), inset 0 -.2cqw .2cqw rgba(0,60,20,.3);
+    opacity: .75;
+  }
+  .preset.on i { opacity: 1; box-shadow: 0 0 1cqw rgba(170,255,200,.95), inset 0 -.2cqw .2cqw rgba(0,60,20,.3); }
+  .preset.empty span { color: #6f757d; }
+  .open { cursor: pointer; }
+  /* green P6400-style skin */
+  body.green .knob .disc { background: radial-gradient(circle at 40% 32%, rgba(255,255,255,.35), rgba(255,255,255,0) 40%), radial-gradient(circle, #2b2e33 0%, #0c0d0f 75%); box-shadow: inset 0 0 0 .2cqw #6d737b, inset 0 -.4cqw .7cqw rgba(0,0,0,.6), 0 0 .2cqw rgba(0,0,0,.6); }
+  body.green #knobR .center::after { content: "SELECT"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 1.3cqw; color: #dfe3e6; letter-spacing: .05em; }
+  body.green .knob .arrow { background: transparent; box-shadow: none; }
+  body.green .knob .arrow::before { content: ""; position: absolute; inset: 15%; border: solid #e6e9ec; border-width: 0 .25cqw .25cqw 0; }
+  body.green .a-up::before { transform: rotate(-135deg); } body.green .a-dn::before { transform: rotate(45deg); }
+  body.green .a-lt::before { transform: rotate(135deg); } body.green .a-rt::before { transform: rotate(-45deg); }
+  body.green .badge { background: linear-gradient(180deg, #4a4e55, #16181b 55%, #33373c); color: #eef0f2; box-shadow: inset 0 0 0 .12cqw #8b9199, 0 .15cqw .25cqw rgba(0,0,0,.8); }
+
+  /* setup menu */
+  .menu { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.72); padding: 12px; }
+  .menu[hidden] { display: none; }
+  .mbox { width: min(640px, 100%); max-height: 100%; overflow: auto; background: #0d0f12; border: 1px solid #2c3036; border-radius: 10px; padding: 14px 16px;
+          font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size: 14px; color: #d7dbe0; box-shadow: 0 10px 40px rgba(0,0,0,.8); }
+  .mhead { display: flex; justify-content: space-between; align-items: center; font-weight: 700; letter-spacing: .12em; color: rgb(var(--illum)); margin-bottom: 10px; }
+  .mhead button { font-size: 18px; padding: 2px 10px; }
+  .mrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+  .mbox button { background: #1b1f24; color: #e6e9ec; border: 1px solid #343941; border-radius: 6px; padding: 8px 12px; font: inherit; cursor: pointer; }
+  .mbox button.sel { border-color: rgb(var(--illum)); color: rgb(var(--illum)); }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .msub { margin-top: 14px; font-weight: 700; } .msub small { font-weight: 400; color: #8a9099; }
+  .mlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin-top: 8px; }
+  .mlist button { text-align: left; font-size: 12px; padding: 7px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mstatus { color: #8a9099; font-size: 12px; margin-top: 6px; min-height: 1em; }
+  body:not(.app) .app-only { display: none; }
+  body.app .hint { display: none; }
+  #file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: 0; top: 0; }
+</style>
+</head>
+<body>
+  <div class="rotate">↻ Turn your phone sideways</div>
+
+  <div class="unit">
+    <div class="face">
+      <div class="panel">
+        <div class="wing">
+          <div class="tag" style="top:9%;left:8%">VOL</div>
+          <div class="knob" id="knobL"><div class="chrome"></div><div class="ring"></div><div class="disc"></div><div class="rotor" id="rotor"><div class="dot"></div></div></div>
+          <div class="cpill l" id="bPrev"><svg viewBox="0 0 24 12"><rect x="0" y="0" width="2.4" height="12"/><path d="M12 0v12L2.6 6z"/><path d="M22 0v12L12.6 6z"/></svg></div>
+        </div>
+
+        <div class="mid">
+          <div class="strip">
+            <div class="lbl">MOSFET 50<small>W</small>×4</div>
+            <div class="badge">AQUADECK</div>
+            <div class="lbl">WMA / MP3</div>
+          </div>
+          <div class="core">
+            <div class="side">
+              <div class="sb" id="bDisp"><span>DISP</span><i></i></div>
+              <div class="sb" id="bIllum"><span>ILLUMI</span><i></i></div>
+            </div>
+            <div class="bezel">
+              <div class="screen" id="screen"><canvas id="lcd"></canvas><canvas id="glow"></canvas><div class="glass"></div></div>
+            </div>
+            <div class="side">
+              <div class="sb" id="bSrc"><span>SRC</span><i></i></div>
+              <div class="sb" id="bClip"><span>CLIP</span><i></i></div>
+            </div>
+          </div>
+          <div class="under"><div class="model">AD-P2003MP<b>OEL</b></div><div class="logo">ORGANIC EL</div></div>
+          <div class="presets" id="presets"></div>
+        </div>
+
+        <div class="wing">
+          <div class="open" id="bOpen">OPEN <i></i></div>
+          <div class="knob" id="knobR"><div class="chrome"></div><div class="ring"></div><div class="disc"></div>
+            <div class="arrow a-up" id="aUp"></div><div class="arrow a-dn" id="aDn"></div>
+            <div class="arrow a-lt" id="aLt"></div><div class="arrow a-rt" id="aRt"></div>
+            <div class="center" id="aMid"></div>
+          </div>
+          <div class="cpill r" id="bNext"><svg viewBox="0 0 24 12"><path d="M2 0v12l9.4-6z"/><path d="M12 0v12l9.4-6z"/><rect x="21.6" y="0" width="2.4" height="12"/></svg></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="file">
+  <div class="menu" id="menu" hidden>
+    <div class="mbox">
+      <div class="mhead">AQUADECK SETUP <button id="mClose">✕</button></div>
+      <div class="mrow"><span>Faceplate</span><div class="seg"><button data-skin="blue">Blue (P7600 style)</button><button data-skin="green">Green (P6400 style)</button></div></div>
+      <div class="mrow"><span>Load clips into preset</span><div class="seg" id="mSlots"></div></div>
+      <div class="mrow"><button id="mLoad">Load animation from this device…</button><button id="mAccess" class="app-only">Media access settings</button></div>
+      <div class="msub">Carozerra clip library <small>— downloaded from github.com/youxufkhan/carozerra</small></div>
+      <div class="mlist" id="mList"><button id="mFetch">Show clips</button></div>
+      <div class="mstatus" id="mStatus"></div>
+    </div>
+  </div>
+
+  <p class="hint">OPEN = setup (faceplate, clips). Demo with a simulated beat. Right knob: centre = play/pause, ◀ ▶ = track, ▲ ▼ = volume. Presets 1–2 are built in; tap an empty preset 3–6 to load your own animation (.lkd file, GIF or video). DISP or tapping the screen switches presets, ILLUMI changes the colour.</p>
+
+<script type="module">
+
+const AW = 256, VW = 368, VH = 64;           // animation area 256x64, full display 368x64
+const PX = 262;                               // right text panel starts here
+
+// ---------- canvases ----------
+const screenEl = document.getElementById('screen');
+const lcd = document.getElementById('lcd'), lctx = lcd.getContext('2d');
+const glow = document.getElementById('glow'), gctx = glow.getContext('2d');
+glow.width = VW; glow.height = VH;
+const sc = document.createElement('canvas'); sc.width = VW; sc.height = VH;
+const s = sc.getContext('2d');
+const gray = document.createElement('canvas'); gray.width = AW; gray.height = VH;
+const g = gray.getContext('2d', { willReadFrequently: true });
+const animImg = s.createImageData(AW, VH);
+const gridCanvas = document.createElement('canvas');
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(VW, Math.round(screenEl.clientWidth * dpr));
+  const h = Math.max(VH, Math.round(screenEl.clientHeight * dpr));
+  lcd.width = w; lcd.height = h; gridCanvas.width = w; gridCanvas.height = h;
+  const gc = gridCanvas.getContext('2d');
+  gc.clearRect(0, 0, w, h); gc.fillStyle = 'rgba(0,0,0,0.72)';
+  const sx = w / VW, sy = h / VH;
+  const gx = Math.max(1, Math.round(sx * 0.2)), gy = Math.max(1, Math.round(sy * 0.2));
+  for (let i = 1; i <= VW; i++) gc.fillRect(Math.round(i * sx) - gx, 0, gx, h);
+  for (let j = 1; j <= VH; j++) gc.fillRect(0, Math.round(j * sy) - gy, w, gy);
+}
+new ResizeObserver(resize).observe(screenEl);
+resize();
+
+function setFont(px = 8) { s.font = px + 'px "Press Start 2P", monospace'; s.textBaseline = 'top'; }
+let fontReady = false;
+document.fonts?.load('8px "Press Start 2P"').then(() => { fontReady = true; }).catch(() => {});
+
+// ---------- themes ----------
+const THEMES = [
+  { n: 'CYAN',   c: [12, 228, 238] },
+  { n: 'BLUE',   c: [40, 150, 255] },
+  { n: 'AMBER',  c: [255, 165, 40] },
+  { n: 'RED',    c: [255, 60, 45] },
+  { n: 'GREEN',  c: [90, 255, 120] },
+  { n: 'WHITE',  c: [225, 235, 255] },
+];
+const BTN = [[60, 200, 255], [70, 150, 255], [255, 170, 60], [255, 80, 60], [100, 255, 140], [200, 215, 255]];
+
+// ---------- state ----------
+const DEMO = [
+  { artist: 'Satellite Kids',    title: 'Summer of 2003',        dur: 214, bpm: 118 },
+  { artist: 'Night Drive FM',    title: 'Chrome Horizon',        dur: 247, bpm: 104 },
+  { artist: 'Blue Lagoon Sound', title: 'Dolphin Dance',         dur: 198, bpm: 126 },
+  { artist: 'Midnight Tollway',  title: 'Bass on the Boulevard', dur: 231, bpm: 96  },
+  { artist: 'Coral Static',      title: 'Organic Light',         dur: 263, bpm: 112 },
+];
+const SOURCES = ['TIDAL', 'SPOTIFY', 'RADIO', 'AUX'];
+const S = { external: false, idx: 0, track: 1, source: 'TIDAL', artist: '', title: '', pos: 0, dur: 0, bpm: 118,
+            playing: true, vol: 18, theme: 0, preset: 1, skin: 'blue', msg: '', msgUntil: 0, scrollStart: 0 };
+try {
+  const sv = JSON.parse(localStorage.getItem('aquadeck2') || '{}');
+  if (THEMES[sv.theme]) S.theme = sv.theme;
+  if (sv.preset >= 1 && sv.preset <= 6) S.preset = sv.preset;
+  if (sv.skin === 'green') S.skin = 'green';
+} catch (e) {}
+const save = () => { try { localStorage.setItem('aquadeck2', JSON.stringify({ theme: S.theme, preset: S.preset, skin: S.skin })); } catch (e) {} };
+function applyTheme() {
+  document.body.classList.toggle('green', S.skin === 'green');
+  document.documentElement.style.setProperty('--illum', S.skin === 'green' ? '120,235,140' : BTN[S.theme].join(','));
+}
+if (window.AndroidBridge) document.body.classList.add('app');
+applyTheme();
+
+let t = 0;
+const flash = (m, secs = 1.6) => { S.msg = String(m).toUpperCase(); S.msgUntil = t + secs; };
+function loadDemo(i) {
+  S.idx = (i + DEMO.length) % DEMO.length;
+  const d = DEMO[S.idx];
+  Object.assign(S, { artist: d.artist, title: d.title, dur: d.dur, bpm: d.bpm, pos: 0, track: S.idx + 1, scrollStart: t });
+}
+loadDemo(0);
+
+// ---------- bridge ----------
+function send(cmd, arg) {
+  try { if (window.AndroidBridge?.command) { window.AndroidBridge.command(cmd, arg == null ? '' : String(arg)); return true; } } catch (e) {}
+  return false;
+}
+let extLevels = null, extAt = -10;
+window.HeadUnit = {
+  setTrack(o = {}) {
+    S.external = true;
+    if (o.title != null) S.title = o.title;
+    if (o.artist != null) S.artist = o.artist;
+    if (o.source) S.source = String(o.source).toUpperCase();
+    if (o.track != null) S.track = o.track;
+    if (o.duration != null) S.dur = o.duration / 1000;
+    S.pos = o.position != null ? o.position / 1000 : 0; S.scrollStart = t;
+  },
+  setPlaying(b) { S.external = true; S.playing = !!b; },
+  setPosition(p, d) { S.external = true; S.pos = p / 1000; if (d) S.dur = d / 1000; },
+  setLevels(a) { if (Array.isArray(a) && a.length) { extLevels = a.map(Number); extAt = t; } },
+  beat(e = 0.8) { onBeat(Math.min(1, e), e > 0.75); },
+  setVolume(v) { S.vol = Math.max(0, Math.min(40, Math.round(v))); updateKnob(); },
+};
+
+// ---------- levels & beat ----------
+const N = 16, lv = new Float32Array(N), pk = new Float32Array(N);
+let beatEnv = 0, bass = 0, bassAvg = 0, lastBeat = 0, nextBeat = 0, beatN = 0;
+let meterL = 0, meterR = 0, peakL = 0, peakR = 0;
+function onBeat(e, accent) { beatEnv = Math.max(beatEnv, e); lastBeat = t; if (accent || e > 0.9 || Math.random() < 0.22) tryJump(e); }
+function updateLevels(dt) {
+  const ext = extLevels && t - extAt < 0.6;
+  if (!ext) {
+    if (S.playing) {
+      if (t >= nextBeat) { beatN++; const acc = beatN % 4 === 0; onBeat(acc ? 1 : 0.5 + Math.random() * 0.35, acc); nextBeat = Math.max(nextBeat + 60 / S.bpm, t); }
+    } else nextBeat = t;
+  }
+  for (let i = 0; i < N; i++) {
+    let target = 0;
+    if (ext) target = extLevels[Math.floor(i * extLevels.length / N)] || 0;
+    else if (S.playing) {
+      const n = 0.5 + 0.5 * Math.sin(t * (1.7 + i * 0.37) + i * 1.3) * Math.sin(t * (0.9 + i * 0.21) + i);
+      target = (0.16 + 0.42 * n) * (1 - i / N * 0.45) + beatEnv * (i < 3 ? 0.75 : i < 7 ? 0.45 : 0.22) * (0.7 + 0.3 * Math.random()) + (Math.random() - 0.5) * 0.08;
+    }
+    target = Math.max(0, Math.min(1, target));
+    lv[i] += (target - lv[i]) * Math.min(1, dt * (target > lv[i] ? 30 : 6));
+    pk[i] = lv[i] > pk[i] ? lv[i] : Math.max(0, pk[i] - dt * 0.45);
+  }
+  beatEnv *= Math.exp(-dt * 5);
+  bass = (lv[0] + lv[1] + lv[2]) / 3;
+  if (ext) { if (bass - bassAvg > 0.12 && t - lastBeat > 0.28) onBeat(Math.min(1, bass * 1.3), bass > 0.6); bassAvg += (bass - bassAvg) * Math.min(1, dt * 2); }
+  let a = 0, b = 0;
+  for (let i = 0; i < 8; i++) { a += lv[i]; b += lv[i + 8]; }
+  const tl = Math.min(1, a / 8 * 1.25 + 0.05 * Math.sin(t * 7)), tr = Math.min(1, (a / 8 * 0.7 + b / 8 * 0.9) * 1.1 + 0.05 * Math.sin(t * 5.3));
+  meterL += (tl - meterL) * Math.min(1, dt * 20); meterR += (tr - meterR) * Math.min(1, dt * 20);
+  peakL = meterL > peakL ? meterL : Math.max(0, peakL - dt * 0.5);
+  peakR = meterR > peakR ? meterR : Math.max(0, peakR - dt * 0.5);
+}
+
+// ---------- built-in dolphin scene (original artwork, 1-bit scanline style) ----------
+const HZ = 30, G = 150;
+const dolphins = [0, 1, 2].map(i => ({ x: 20 + i * 90 + Math.random() * 30, y: 50, vy: 0, ang: 0, state: 'swim',
+  sp: 22 + Math.random() * 10, ph: Math.random() * 6.28, cool: 0, sc: 1.05 + Math.random() * 0.25 }));
+const splashes = [], rings = [], bubbles = [];
+const stars = Array.from({ length: 22 }, () => ({ x: Math.random() * AW, y: 1 + Math.random() * (HZ - 6), tw: Math.random() * 10 }));
+
+function tryJump(e) {
+  if (!S.playing) return;
+  const c = dolphins.filter(d => d.state === 'swim' && d.cool <= 0 && d.x > 20 && d.x < AW - 60);
+  if (!c.length) return;
+  const d = c[Math.floor(Math.random() * c.length)];
+  d.state = 'jump'; d.vy = -(86 + e * 30); d.cool = 1.7;
+}
+function splash(x, n, big) {
+  for (let i = 0; i < n; i++) splashes.push({ x: x + (Math.random() - 0.5) * 8, y: HZ, vx: (Math.random() - 0.5) * 70, vy: -35 - Math.random() * (big ? 60 : 35), life: 0.5 + Math.random() * 0.5 });
+  rings.push({ x, r: 2, life: 0.8 });
+}
+function updateScene(dt) {
+  const mul = S.playing ? 1 : 0.4;
+  for (const d of dolphins) {
+    d.cool -= dt;
+    if (d.state === 'swim') {
+      const target = HZ + 17 + Math.sin(t * 1.2 + d.ph) * 3;
+      d.y += (target - d.y) * Math.min(1, dt * 3);
+      d.x += d.sp * mul * dt;
+      d.ang = Math.cos(t * 1.2 + d.ph) * 0.12;
+      if (Math.random() < dt * 0.7) bubbles.push({ x: d.x + 14 * d.sc, y: d.y - 3, vy: -10 - Math.random() * 8 });
+    } else {
+      const py = d.y;
+      d.vy += G * dt; d.y += d.vy * dt; d.x += d.sp * 1.5 * dt;
+      d.ang = Math.atan2(d.vy, d.sp * 1.5);
+      if (py > HZ && d.y <= HZ) splash(d.x, 6, false);
+      if (py < HZ && d.y >= HZ) splash(d.x, 16, true);
+      if (d.vy > 0 && d.y > HZ + 10) d.state = 'swim';
+    }
+    if (d.x > AW + 40) d.x = -40;
+  }
+  for (let i = splashes.length - 1; i >= 0; i--) { const p = splashes[i]; p.vy += 170 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; if (p.life <= 0 || p.y > HZ + 2) splashes.splice(i, 1); }
+  for (let i = rings.length - 1; i >= 0; i--) { const r = rings[i]; r.r += dt * 22; r.life -= dt; if (r.life <= 0) rings.splice(i, 1); }
+  for (let i = bubbles.length - 1; i >= 0; i--) { const b = bubbles[i]; b.y += b.vy * dt; if (b.y < HZ + 2) bubbles.splice(i, 1); }
+}
+function dolphinPath(c) {
+  c.beginPath();
+  c.moveTo(16, 1);
+  c.quadraticCurveTo(12, -0.5, 10, -2);
+  c.bezierCurveTo(7, -6.5, -4, -6.5, -10, -3);
+  c.quadraticCurveTo(-14, -1.5, -16, -1);
+  c.lineTo(-21.5, -6); c.lineTo(-18.5, 0); c.lineTo(-21.5, 6); c.lineTo(-16, 1);
+  c.quadraticCurveTo(-10, 3.8, -2, 4.3);
+  c.bezierCurveTo(5, 4.8, 10, 3, 16, 1.5);
+  c.closePath();
+  c.moveTo(1, -5.6); c.lineTo(-6.5, -12.5); c.quadraticCurveTo(-5.2, -8, -6.8, -4.8); c.closePath();
+  c.moveTo(5, 3.2); c.lineTo(-0.5, 9.5); c.lineTo(1.5, 3.6); c.closePath();
+}
+function drawDolphin(d) {
+  const c = g;
+  c.save(); c.translate(d.x, d.y); c.rotate(d.ang); c.scale(d.sc, d.sc);
+  const under = d.y > HZ + 6;
+  const gr = c.createLinearGradient(0, -7, 0, 6);
+  gr.addColorStop(0, under ? '#d8d8d8' : '#ffffff');
+  gr.addColorStop(0.45, under ? '#a8a8a8' : '#d0d0d0');
+  gr.addColorStop(1, under ? '#707070' : '#7a7a7a');
+  dolphinPath(c);
+  c.fillStyle = gr; c.fill();
+  c.lineWidth = 1.1 / d.sc; c.strokeStyle = '#000'; c.stroke();
+  c.fillStyle = '#000'; c.fillRect(8.4, -2, 1.8, 1.8);
+  c.restore();
+}
+function renderScene() {
+  const c = g;
+  // sky
+  let gr = c.createLinearGradient(0, 0, 0, HZ);
+  gr.addColorStop(0, '#000'); gr.addColorStop(0.6, '#0a0a0a'); gr.addColorStop(1, '#3a3a3a');
+  c.fillStyle = gr; c.fillRect(0, 0, AW, HZ);
+  // moon + halo
+  const mx = 205, my = 11;
+  gr = c.createRadialGradient(mx, my, 4, mx, my, 26);
+  gr.addColorStop(0, 'rgba(255,255,255,.4)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = gr; c.fillRect(mx - 30, 0, 60, HZ);
+  c.fillStyle = '#fff'; c.beginPath(); c.arc(mx, my, 7, 0, 6.283); c.fill();
+  for (const st of stars) { const a = 0.5 + 0.5 * Math.sin(t * 2 + st.tw); if (a > 0.55) { c.fillStyle = '#fff'; c.fillRect(Math.round(st.x), Math.round(st.y), 1, 1); } }
+  // sea
+  gr = c.createLinearGradient(0, HZ, 0, VH);
+  gr.addColorStop(0, '#2e2e2e'); gr.addColorStop(1, '#000');
+  c.fillStyle = gr; c.fillRect(0, HZ, AW, VH - HZ);
+  // moon reflection + swell streaks
+  const amp = 0.7 + bass * 2.6;
+  for (let y = HZ + 1; y < VH; y += 2) {
+    const depth = (y - HZ) / (VH - HZ);
+    const w = 10 + depth * 46, wob = Math.sin(y * 0.9 + t * 3) * (2 + depth * 6);
+    c.fillStyle = `rgba(255,255,255,${0.75 - depth * 0.45})`;
+    c.fillRect(Math.round(mx - w / 2 + wob), y, Math.round(w * (0.55 + 0.45 * Math.sin(y * 1.7 + t * 4))), 1);
+    c.fillStyle = 'rgba(255,255,255,.45)';
+    const off = (t * (8 + depth * 14) + y * 13) % 24;
+    for (let x = -24; x < AW; x += 24) c.fillRect(Math.round(x + off), y, 7 + Math.round(depth * 6), 1);
+  }
+  // bubbles & dolphins (under water first)
+  c.fillStyle = 'rgba(255,255,255,.8)';
+  for (const b of bubbles) c.fillRect(Math.round(b.x), Math.round(b.y), 1, 1);
+  for (const d of dolphins) if (d.y > HZ + 6) drawDolphin(d);
+  // surface line
+  c.fillStyle = '#fff';
+  let prev = null;
+  for (let x = 0; x < AW; x++) {
+    const y = Math.round(HZ + Math.sin(x * 0.11 + t * 2) * amp * 0.6 + Math.sin(x * 0.045 - t * 1.3) * amp * 0.5);
+    c.fillRect(x, prev == null ? y : Math.min(y, prev), 1, prev == null ? 1 : Math.abs(y - prev) + 1);
+    prev = y;
+  }
+  for (const r of rings) { c.strokeStyle = `rgba(255,255,255,${r.life})`; c.lineWidth = 1; c.beginPath(); c.ellipse(r.x, HZ + 1, r.r, r.r * 0.22, 0, 0, 6.283); c.stroke(); }
+  for (const d of dolphins) if (d.y <= HZ + 6) drawDolphin(d);
+  c.fillStyle = '#fff';
+  for (const p of splashes) c.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
+}
+// horizontal-scanline threshold map, like the original OEL artwork
+const TH = [[0.10, 0.28], [0.55, 0.72], [0.18, 0.36], [0.63, 0.82]];
+function ditherSceneInto(dst) {
+  const src = g.getImageData(0, 0, AW, VH).data, o = dst.data;
+  const [R, Gc, B] = THEMES[S.theme].c;
+  for (let y = 0; y < VH; y++) {
+    const row = TH[y & 3];
+    for (let x = 0; x < AW; x++) {
+      const i = (y * AW + x) * 4, v = src[i] / 255;
+      if (v > row[x & 1]) {
+        const k = v > 0.93 ? 1.12 : 0.62 + 0.38 * v;
+        o[i] = Math.min(255, R * k + (v > 0.93 ? 40 : 0)); o[i + 1] = Math.min(255, Gc * k + (v > 0.93 ? 30 : 0)); o[i + 2] = Math.min(255, B * k + (v > 0.93 ? 30 : 0));
+      } else { o[i] = o[i + 1] = o[i + 2] = 0; }
+      o[i + 3] = 255;
+    }
+  }
+}
+
+// ---------- clip slots (3–6) ----------
+const slots = {};   // n -> {name, kind, frames:[ImageData native], delays, mono, disp:[ImageData 256x64], el}
+let pendingSlot = null;
+const fileInput = document.getElementById('file');
+
+function bmpToImageData(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (dv.getUint16(0) !== 0x424d) throw new Error('not a BMP');
+  const off = dv.getUint32(10, true), hs = dv.getUint32(14, true);
+  const w = dv.getInt32(18, true), hRaw = dv.getInt32(22, true), bpp = dv.getUint16(28, true);
+  const h = Math.abs(hRaw), bottomUp = hRaw > 0;
+  const out = new ImageData(w, h), o = out.data;
+  const pal = [];
+  if (bpp <= 8) { const n = dv.getUint32(46, true) || (1 << bpp); for (let i = 0; i < n; i++) { const p = 14 + hs + i * 4; pal.push([b[p + 2], b[p + 1], b[p]]); } }
+  const stride = Math.floor((bpp * w + 31) / 32) * 4;
+  for (let y = 0; y < h; y++) {
+    const sy = bottomUp ? h - 1 - y : y, rp = off + sy * stride;
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      let r, gg, bb;
+      if (bpp === 24 || bpp === 32) { const p = rp + x * (bpp / 8); bb = b[p]; gg = b[p + 1]; r = b[p + 2]; }
+      else if (bpp === 8) { [r, gg, bb] = pal[b[rp + x]] || [0, 0, 0]; }
+      else if (bpp === 4) { const v = b[rp + (x >> 1)]; [r, gg, bb] = pal[x & 1 ? v & 15 : v >> 4] || [0, 0, 0]; }
+      else if (bpp === 1) { const v = (b[rp + (x >> 3)] >> (7 - (x & 7))) & 1; [r, gg, bb] = pal[v] || [0, 0, 0]; }
+      else throw new Error('BMP ' + bpp + '-bit not supported');
+      o[i] = r; o[i + 1] = gg; o[i + 2] = bb; o[i + 3] = 255;
+    }
+  }
+  return out;
+}
+async function gunzip(u8) {
+  const ds = new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(ds).arrayBuffer());
+}
+async function decodeLKD(buf) {
+  const u8 = new Uint8Array(buf);
+  if (String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== 'zLKD') throw new Error('not an LKD file');
+  const n = new DataView(buf).getUint32(16, true);
+  const tar = await gunzip(u8.subarray(20));
+  let off = 0, bmp = null;
+  while (off + 512 <= tar.length && tar[off]) {
+    const sz = parseInt(String.fromCharCode(...tar.subarray(off + 124, off + 136)).replace(/[^0-7]/g, ''), 8) || 0;
+    const ty = tar[off + 156];
+    if (ty === 48 || ty === 0) { bmp = tar.subarray(off + 512, off + 512 + sz); break; }
+    off += 512 + Math.ceil(sz / 512) * 512;
+  }
+  if (!bmp) throw new Error('no image inside');
+  const strip = bmpToImageData(bmp);
+  const count = n > 0 ? n : Math.max(1, Math.round(strip.height / 64));
+  const fh = Math.floor(strip.height / count), fw = strip.width;
+  const frames = [];
+  for (let k = 0; k < count; k++) {
+    const f = new ImageData(fw, fh);
+    f.data.set(strip.data.subarray(k * fh * fw * 4, (k + 1) * fh * fw * 4));
+    frames.push(f);
+  }
+  return { frames, delays: frames.map(() => 60) };
+}
+function lzw(minSize, data, count) {
+  const out = new Uint8Array(count), clear = 1 << minSize, eoi = clear + 1;
+  const prefix = new Uint16Array(4096), suffix = new Uint8Array(4096), stack = new Uint8Array(4097);
+  for (let i = 0; i < clear; i++) suffix[i] = i;
+  let codeSize = minSize + 1, dict = eoi + 1, datum = 0, bits = 0, pos = 0, op = 0, old = -1, first = 0;
+  while (op < count) {
+    while (bits < codeSize) { if (pos >= data.length) return out; datum |= data[pos++] << bits; bits += 8; }
+    let code = datum & ((1 << codeSize) - 1); datum >>>= codeSize; bits -= codeSize;
+    if (code === clear) { codeSize = minSize + 1; dict = eoi + 1; old = -1; continue; }
+    if (code === eoi) break;
+    if (old === -1) { out[op++] = suffix[code]; old = first = code; continue; }
+    const inCode = code; let sp = 0;
+    if (code >= dict) { stack[sp++] = first; code = old; }
+    while (code >= clear) { stack[sp++] = suffix[code]; code = prefix[code]; }
+    first = suffix[code]; stack[sp++] = first;
+    if (dict < 4096) { prefix[dict] = old; suffix[dict] = first; dict++; if (dict === (1 << codeSize) && codeSize < 12) codeSize++; }
+    old = inCode;
+    while (sp > 0 && op < count) out[op++] = stack[--sp];
+  }
+  return out;
+}
+async function decodeGIF(buf) {
+  const b = new Uint8Array(buf);
+  const W = b[6] | b[7] << 8, H = b[8] | b[9] << 8, lp = b[10];
+  let p = 13, gct = null;
+  if (lp & 0x80) { const n = 3 << ((lp & 7) + 1); gct = b.subarray(p, p + n); p += n; }
+  const canvas = new Uint8ClampedArray(W * H * 4);
+  for (let i = 3; i < canvas.length; i += 4) canvas[i] = 255;
+  const frames = [], delays = [];
+  let disposal = 0, delay = 60, transIdx = -1;
+  const subBlocks = () => { const parts = []; let len = 0; while (p < b.length) { const n = b[p++]; if (!n) break; parts.push(b.subarray(p, p + n)); len += n; p += n; } const o = new Uint8Array(len); let k = 0; for (const q of parts) { o.set(q, k); k += q.length; } return o; };
+  while (p < b.length) {
+    const tag = b[p++];
+    if (tag === 0x3B) break;
+    if (tag === 0x21) {
+      const label = b[p++];
+      if (label === 0xF9) { const pk = b[p + 1]; disposal = (pk >> 2) & 7; delay = (b[p + 2] | b[p + 3] << 8) * 10 || 60; transIdx = pk & 1 ? b[p + 4] : -1; p += 6; }
+      else subBlocks();
+    } else if (tag === 0x2C) {
+      const fx = b[p] | b[p + 1] << 8, fy = b[p + 2] | b[p + 3] << 8, fw = b[p + 4] | b[p + 5] << 8, fh = b[p + 6] | b[p + 7] << 8, ip = b[p + 8];
+      p += 9;
+      let pal = gct;
+      if (ip & 0x80) { const n = 3 << ((ip & 7) + 1); pal = b.subarray(p, p + n); p += n; }
+      const minSize = b[p++];
+      const idx = lzw(minSize, subBlocks(), fw * fh);
+      const backup = disposal === 3 ? canvas.slice() : null;
+      const rows = [];
+      if (ip & 0x40) { for (const [st, step] of [[0, 8], [4, 8], [2, 4], [1, 2]]) for (let y = st; y < fh; y += step) rows.push(y); }
+      else for (let y = 0; y < fh; y++) rows.push(y);
+      for (let r = 0; r < fh; r++) {
+        const y = fy + rows[r]; if (y >= H) continue;
+        for (let x = 0; x < fw; x++) {
+          const c = idx[r * fw + x]; if (c === transIdx || fx + x >= W) continue;
+          const o = (y * W + fx + x) * 4;
+          canvas[o] = pal[c * 3]; canvas[o + 1] = pal[c * 3 + 1]; canvas[o + 2] = pal[c * 3 + 2]; canvas[o + 3] = 255;
+        }
+      }
+      frames.push(new ImageData(canvas.slice(), W, H));
+      delays.push(Math.max(20, delay));
+      if (disposal === 2) { for (let y = fy; y < Math.min(H, fy + fh); y++) for (let x = fx; x < Math.min(W, fx + fw); x++) { const o = (y * W + x) * 4; canvas[o] = canvas[o + 1] = canvas[o + 2] = 0; } }
+      else if (disposal === 3 && backup) canvas.set(backup);
+      disposal = 0; transIdx = -1; delay = 60;
+      if (frames.length >= 400) break;
+    } else break;
+  }
+  if (!frames.length) throw new Error('empty GIF');
+  return { frames, delays };
+}
+function isMono(frames) {
+  let warm = 0, total = 0;
+  for (let k = 0; k < frames.length; k += Math.max(1, Math.floor(frames.length / 6))) {
+    const d = frames[k].data;
+    for (let i = 0; i < d.length; i += 4 * 7) { total++; if (d[i] > d[i + 2] + 30 || (d[i] > 60 && d[i] > d[i + 1] + 30)) warm++; }
+  }
+  return warm / Math.max(1, total) < 0.03;
+}
+const fitC = document.createElement('canvas'), fitX = fitC.getContext('2d', { willReadFrequently: true });
+const nat = document.createElement('canvas'), natX = nat.getContext('2d');
+function fitFrame(img, mono) {
+  fitC.width = AW; fitC.height = VH;
+  nat.width = img.width; nat.height = img.height; natX.putImageData(img, 0, 0);
+  const k = Math.min(AW / img.width, VH / img.height);
+  const w = Math.round(img.width * k), h = Math.round(img.height * k);
+  fitX.imageSmoothingEnabled = k < 1;
+  fitX.fillStyle = '#000'; fitX.fillRect(0, 0, AW, VH);
+  fitX.drawImage(nat, Math.round((AW - w) / 2), Math.round((VH - h) / 2), w, h);
+  const out = fitX.getImageData(0, 0, AW, VH);
+  if (mono) tint(out.data);
+  return out;
+}
+function tint(d) {
+  const [R, Gc, B] = THEMES[S.theme].c;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = Math.max(d[i], d[i + 1], d[i + 2]) / 255;
+    if (v < 0.08) { d[i] = d[i + 1] = d[i + 2] = 0; continue; }
+    const k = Math.min(1, v * 1.05), w = v > 0.9 ? (v - 0.9) * 3 : 0;
+    d[i] = Math.min(255, R * k + 255 * w * 0.4); d[i + 1] = Math.min(255, Gc * k + 255 * w * 0.3); d[i + 2] = Math.min(255, B * k + 255 * w * 0.3);
+  }
+}
+function prepSlot(sl) { if (sl.frames) sl.disp = sl.frames.map(f => fitFrame(f, sl.mono)); }
+
+async function loadFileIntoSlot(n, blob, name, persist = true) {
+  flash('LOADING ' + n);
+  const buf = await blob.arrayBuffer();
+  const head = new Uint8Array(buf.slice(0, 6));
+  const sig = String.fromCharCode(...head);
+  let sl;
+  try {
+    if (sig.startsWith('zLKD')) { sl = await decodeLKD(buf); sl.kind = 'lkd'; }
+    else if (sig.startsWith('GIF8')) { sl = await decodeGIF(buf); sl.kind = 'gif'; }
+    else if ((blob.type || '').startsWith('video') || /\.(mp4|mov|m4v|webm)$/i.test(name)) {
+      const v = document.createElement('video');
+      v.src = URL.createObjectURL(blob); v.muted = true; v.loop = true; v.playsInline = true;
+      v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
+      v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      document.body.appendChild(v); v.play().catch(() => {});
+      sl = { kind: 'video', el: v };
+    } else {
+      const bm = await createImageBitmap(blob);
+      const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height;
+      const x = c.getContext('2d'); x.drawImage(bm, 0, 0);
+      sl = { kind: 'image', frames: [x.getImageData(0, 0, bm.width, bm.height)], delays: [1000] };
+    }
+  } catch (e) { flash('CANNOT READ FILE', 2.2); return; }
+  if (slots[n]?.el) slots[n].el.remove();
+  sl.name = name; sl.fi = 0; sl.acc = 0;
+  if (sl.frames) { sl.mono = isMono(sl.frames); prepSlot(sl); }
+  slots[n] = sl;
+  S.preset = n; save(); renderPresets();
+  flash('P' + n + ' ' + name.replace(/\.[^.]+$/, ''), 2);
+  if (persist) dbPut(n, { name, blob });
+}
+fileInput.addEventListener('change', e => {
+  const f = e.target.files?.[0];
+  if (f && pendingSlot) loadFileIntoSlot(pendingSlot, f, f.name);
+  fileInput.value = ''; pendingSlot = null;
+});
+function pickFor(n) { pendingSlot = n; fileInput.click(); }
+
+// IndexedDB persistence (per browser, optional)
+let dbp = null;
+function db() {
+  if (!dbp) dbp = new Promise((res, rej) => {
+    try { const r = indexedDB.open('aquadeck', 1); r.onupgradeneeded = () => r.result.createObjectStore('slots'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }
+    catch (e) { rej(e); }
+  });
+  return dbp;
+}
+async function dbPut(n, v) { try { const d = await db(); d.transaction('slots', 'readwrite').objectStore('slots').put(v, n); } catch (e) {} }
+async function dbAll() {
+  try {
+    const d = await db();
+    return await new Promise(res => {
+      const out = {}, st = d.transaction('slots').objectStore('slots'), r = st.openCursor();
+      r.onsuccess = () => { const c = r.result; if (c) { out[c.key] = c.value; c.continue(); } else res(out); };
+      r.onerror = () => res(out);
+    });
+  } catch (e) { return {}; }
+}
+dbAll().then(async all => { for (const k of Object.keys(all)) { const v = all[k]; if (v?.blob) await loadFileIntoSlot(+k, v.blob, v.name, false); } if (!slots[S.preset] && S.preset > 2) S.preset = 1; renderPresets(); S.msg = ''; });
+
+// ---------- right panel ----------
+function txt(str, x, y, color) { s.fillStyle = color; s.fillText(str, Math.round(x), Math.round(y)); }
+const fmt = sec => { sec = Math.max(0, sec || 0); return Math.floor(sec / 60) + ':' + String(Math.floor(sec % 60)).padStart(2, '0'); };
+function pcol(k, add = 0) { const c = S.skin === 'green' ? [255, 172, 40] : THEMES[S.theme].c; return `rgb(${Math.min(255, c[0] * k + add)},${Math.min(255, c[1] * k + add)},${Math.min(255, c[2] * k + add)})`; }
+function col(k, add = 0) { const c = THEMES[S.theme].c; return `rgb(${Math.min(255, c[0] * k + add)},${Math.min(255, c[1] * k + add)},${Math.min(255, c[2] * k + add)})`; }
+
+function drawPanel() {
+  const main = pcol(1), bright = pcol(1, 70), dim = pcol(0.2);
+  setFont(8);
+  const showMsg = S.msg && t < S.msgUntil;
+  // row 1: track
+  txt('TRACK', PX, 3, main);
+  txt(String(S.track).padStart(2, '0'), PX + 46, 3, bright);
+  // row 2: big time
+  const tm = fmt(S.pos);
+  const blink = !S.playing && Math.floor(t * 2) % 2;
+  if (!blink) { if (tm.length <= 4) { setFont(16); txt(tm, PX, 15, bright); setFont(8); } else txt(tm, PX, 20, bright); }
+  // row 3: source + state
+  const src = S.source.slice(0, 7);
+  txt(src, PX, 37, main);
+  s.fillStyle = main;
+  const ix = PX + 62;
+  if (S.playing) { s.beginPath(); s.moveTo(ix, 37); s.lineTo(ix, 45); s.lineTo(ix + 6, 41); s.closePath(); s.fill(); }
+  else { s.fillRect(ix, 37, 2, 8); s.fillRect(ix + 4, 37, 2, 8); }
+  // row 4: marquee (title or message)
+  const line = (showMsg ? S.msg : (S.artist ? S.artist + ' - ' : '') + (S.title || '')).toUpperCase();
+  const boxW = 70;
+  s.save(); s.beginPath(); s.rect(PX, 52, boxW, 10); s.clip();
+  const tw = s.measureText(line).width;
+  if (tw <= boxW) txt(line, PX, 53, showMsg ? bright : main);
+  else {
+    const cyc = tw + 32, offx = Math.max(0, (t - (showMsg ? S.msgUntil - 1.6 : S.scrollStart) - 1) * 24) % cyc;
+    txt(line, PX - offx, 53, showMsg ? bright : main); txt(line, PX - offx + cyc, 53, showMsg ? bright : main);
+  }
+  s.restore();
+  // level meters L / R
+  const segs = 15, mx0 = 336;
+  for (let ch = 0; ch < 2; ch++) {
+    const m = ch ? meterR : meterL, p = ch ? peakR : peakL;
+    const lit = Math.round(m * segs), pkS = Math.min(segs - 1, Math.round(p * segs));
+    const x = mx0 + ch * 16;
+    for (let k = 0; k < segs; k++) {
+      const y = 60 - k * 4;
+      s.fillStyle = k < lit || (k === pkS && pkS > 0) ? (k > segs - 5 ? bright : main) : dim;
+      s.fillRect(x, y, 14, 3);
+    }
+  }
+}
+
+// ---------- spectrum preset ----------
+function drawSpectrum() {
+  const n = 16, gap = 3, bw = Math.floor((AW - 8 - (n - 1) * gap) / n), x0 = 4 + Math.floor((AW - 8 - (n * bw + (n - 1) * gap)) / 2);
+  const segs = 15;
+  for (let i = 0; i < n; i++) {
+    const lit = Math.round(lv[i] * segs), p = Math.round(pk[i] * segs);
+    for (let k = 0; k < segs; k++) {
+      s.fillStyle = k < lit || (k === p && p > 0) ? (k > 10 ? col(1, 70) : col(1)) : col(0.13);
+      s.fillRect(x0 + i * (bw + gap), 60 - k * 4, bw, 3);
+    }
+  }
+}
+
+// ---------- presets UI ----------
+const presetsEl = document.getElementById('presets');
+function renderPresets() {
+  presetsEl.innerHTML = '';
+  for (let n = 1; n <= 6; n++) {
+    const el = document.createElement('div');
+    el.className = 'preset' + (S.preset === n ? ' on' : '') + (n > 2 && !slots[n] ? ' empty' : '');
+    el.innerHTML = `<span>${n}</span><i></i>`;
+    el.addEventListener('click', () => {
+      if (n > 2 && !slots[n]) { pickFor(n); return; }
+      S.preset = n; save(); renderPresets();
+      flash(n === 1 ? 'P1 DOLPHINS' : n === 2 ? 'P2 SPECTRUM' : 'P' + n + ' ' + slots[n].name.replace(/\.[^.]+$/, ''), 1.6);
+    });
+    presetsEl.appendChild(el);
+  }
+}
+renderPresets();
+
+// ---------- frame loop ----------
+function update(dt) {
+  if (S.playing && S.dur > 0) { S.pos += dt; if (S.pos >= S.dur) { if (!S.external) loadDemo(S.idx + 1); else S.pos = S.dur; } }
+  updateLevels(dt);
+  updateScene(dt);
+  const sl = slots[S.preset];
+  if (sl?.disp && sl.disp.length > 1) {
+    sl.acc += dt * 1000 * (S.playing ? 1 + beatEnv * 0.5 : 0.5);
+    while (sl.acc >= sl.delays[sl.fi]) { sl.acc -= sl.delays[sl.fi]; sl.fi = (sl.fi + 1) % sl.disp.length; }
+  }
+}
+function render() {
+  s.setTransform(1, 0, 0, 1, 0, 0);
+  s.fillStyle = '#000'; s.fillRect(0, 0, VW, VH);
+  const sl = slots[S.preset];
+  if (S.preset === 1 || (S.preset > 2 && !sl)) { renderScene(); ditherSceneInto(animImg); s.putImageData(animImg, 0, 0); }
+  else if (S.preset === 2) drawSpectrum();
+  else if (sl.disp) s.putImageData(sl.disp[sl.fi], 0, 0);
+  else if (sl.kind === 'video' && sl.el.readyState >= 2 && sl.el.videoWidth) {
+    const v = sl.el, k = Math.max(AW / v.videoWidth, VH / v.videoHeight);
+    s.save(); s.beginPath(); s.rect(0, 0, AW, VH); s.clip();
+    s.drawImage(v, (AW - v.videoWidth * k) / 2, (VH - v.videoHeight * k) / 2, v.videoWidth * k, v.videoHeight * k);
+    s.restore();
+  }
+  drawPanel();
+  gctx.clearRect(0, 0, VW, VH); gctx.drawImage(sc, 0, 0);
+  lctx.imageSmoothingEnabled = false;
+  lctx.drawImage(sc, 0, 0, lcd.width, lcd.height);
+  lctx.drawImage(gridCanvas, 0, 0);
+}
+let last = performance.now() / 1000;
+function frame(ms) {
+  const now = ms / 1000, dt = Math.min(0.05, Math.max(0, now - last));
+  last = now; t += dt;
+  update(dt); render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------- controls ----------
+const on = (id, fn) => document.getElementById(id).addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); fn(); });
+function cyclePreset() {
+  const list = [1, 2, 3, 4, 5, 6].filter(n => n <= 2 || slots[n]);
+  S.preset = list[(list.indexOf(S.preset) + 1) % list.length]; save(); renderPresets();
+  flash(S.preset === 1 ? 'P1 DOLPHINS' : S.preset === 2 ? 'P2 SPECTRUM' : 'P' + S.preset + ' ' + slots[S.preset].name.replace(/\.[^.]+$/, ''), 1.6);
+}
+const prev = () => { if (send('prev')) return; if (S.pos > 3) S.pos = 0; else loadDemo(S.idx - 1); };
+const next = () => { if (send('next')) return; loadDemo(S.idx + 1); };
+const playPause = () => { if (send('playpause')) return; S.playing = !S.playing; flash(S.playing ? 'PLAY' : 'PAUSE', 1); };
+on('bPrev', prev); on('bNext', next); on('aLt', prev); on('aRt', next); on('aMid', playPause);
+on('aUp', () => setVol(S.vol + 1)); on('aDn', () => setVol(S.vol - 1));
+on('bDisp', cyclePreset);
+screenEl.addEventListener('click', cyclePreset);
+on('bIllum', () => {
+  S.theme = (S.theme + 1) % THEMES.length; applyTheme(); save();
+  for (const k in slots) prepSlot(slots[k]);
+  flash('ILLUMI ' + THEMES[S.theme].n, 1.4);
+});
+on('bSrc', () => { if (send('source')) return; S.source = SOURCES[(SOURCES.indexOf(S.source) + 1) % SOURCES.length]; flash('SRC ' + S.source, 1.3); });
+on('bClip', () => {
+  let n = S.preset > 2 ? S.preset : [3, 4, 5, 6].find(k => !slots[k]) || 3;
+  pickFor(n);
+});
+
+// setup menu
+const menu = document.getElementById('menu'), mStatus = document.getElementById('mStatus');
+let target = 3;
+function renderMenu() {
+  document.querySelectorAll('[data-skin]').forEach(b => b.classList.toggle('sel', b.dataset.skin === S.skin));
+  const ms = document.getElementById('mSlots'); ms.innerHTML = '';
+  for (let n = 3; n <= 6; n++) {
+    const b = document.createElement('button');
+    b.textContent = n + (slots[n] ? ' · ' + slots[n].name.replace(/\.[^.]+$/, '').slice(0, 12) : ' · empty');
+    b.className = n === target ? 'sel' : '';
+    b.onclick = () => { target = n; renderMenu(); };
+    ms.appendChild(b);
+  }
+}
+on('bOpen', () => { target = S.preset > 2 ? S.preset : [3, 4, 5, 6].find(k => !slots[k]) || 3; renderMenu(); menu.hidden = false; });
+on('mClose', () => { menu.hidden = true; });
+menu.addEventListener('click', e => { if (e.target === menu) menu.hidden = true; });
+document.querySelectorAll('[data-skin]').forEach(b => b.addEventListener('click', () => {
+  S.skin = b.dataset.skin;
+  if (S.skin === 'green' && S.theme === 0) { S.theme = 1; for (const k in slots) prepSlot(slots[k]); }
+  applyTheme(); save(); renderMenu();
+}));
+on('mLoad', () => { menu.hidden = true; pickFor(target); });
+on('mAccess', () => send('settings'));
+on('mFetch', async () => {
+  const list = document.getElementById('mList');
+  mStatus.textContent = 'Loading clip list…';
+  try {
+    const r = await fetch('https://api.github.com/repos/youxufkhan/carozerra/contents/assets/clips');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const items = (await r.json()).filter(x => /\.(lkd|gif)$/i.test(x.name)).sort((a, b) => a.name.localeCompare(b.name));
+    list.innerHTML = '';
+    for (const it of items) {
+      const b = document.createElement('button');
+      b.textContent = it.name.replace(/\.[^.]+$/, '');
+      b.onclick = async () => {
+        mStatus.textContent = 'Downloading ' + it.name + '…';
+        try {
+          const f = await fetch(it.download_url);
+          if (!f.ok) throw new Error('HTTP ' + f.status);
+          await loadFileIntoSlot(target, await f.blob(), it.name);
+          mStatus.textContent = it.name + ' → preset ' + target;
+          renderMenu();
+        } catch (e) { mStatus.textContent = 'Download failed (' + e.message + ').'; }
+      };
+      list.appendChild(b);
+    }
+    mStatus.textContent = items.length + ' clips. Tap one to load it into preset ' + target + '.';
+  } catch (e) {
+    mStatus.textContent = window.AndroidBridge ? 'Could not reach GitHub (' + e.message + ').' : 'The clip library works in the Android app. Here, use "Load animation from this device".';
+  }
+});
+
+// volume knob (left)
+const knob = document.getElementById('knobL'), rotor = document.getElementById('rotor');
+function updateKnob() { rotor.style.transform = 'rotate(' + (-135 + S.vol / 40 * 270) + 'deg)'; }
+function setVol(v) { v = Math.max(0, Math.min(40, v)); if (v === S.vol) return; S.vol = v; updateKnob(); flash('VOLUME ' + v, 1.3); send('volume', v); }
+updateKnob();
+let drag = null;
+const ang = e => { const r = knob.getBoundingClientRect(); return Math.atan2(e.clientY - (r.top + r.height / 2), e.clientX - (r.left + r.width / 2)); };
+knob.addEventListener('pointerdown', e => { e.preventDefault(); try { knob.setPointerCapture(e.pointerId); } catch (_) {} drag = { a: ang(e), acc: 0 }; });
+knob.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const a = ang(e); let d = a - drag.a;
+  if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI;
+  drag.acc += d; drag.a = a;
+  const step = Math.PI / 14, n = Math.trunc(drag.acc / step);
+  if (n) { drag.acc -= n * step; setVol(S.vol + n); }
+});
+knob.addEventListener('pointerup', () => drag = null); knob.addEventListener('pointercancel', () => drag = null);
+knob.addEventListener('wheel', e => { e.preventDefault(); setVol(S.vol + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); playPause(); }
+  else if (e.code === 'ArrowRight') next(); else if (e.code === 'ArrowLeft') prev();
+  else if (e.code === 'ArrowUp') setVol(S.vol + 1); else if (e.code === 'ArrowDown') setVol(S.vol - 1);
+  else if (e.key === 'd') cyclePreset();
+});
+</script>
+</body>
+</html>
