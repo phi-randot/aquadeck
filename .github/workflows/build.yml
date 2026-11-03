@@ -34,3 +34,18 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: AquaDeck build ${{ github.run_number }}
           files: AquaDeck.apk
+      - name: Upload to Appetize (optional)
+        env:
+          APPETIZE_TOKEN: ${{ secrets.APPETIZE_TOKEN }}
+          APPETIZE_KEY: ${{ vars.APPETIZE_KEY }}
+        run: |
+          if [ -z "$APPETIZE_TOKEN" ]; then echo "No APPETIZE_TOKEN secret, skipping."; exit 0; fi
+          URL=https://api.appetize.io/v1/apps
+          if [ -n "$APPETIZE_KEY" ]; then URL="$URL/$APPETIZE_KEY"; fi
+          curl -sS -X POST "$URL" -H "X-API-KEY: $APPETIZE_TOKEN" \
+            -F "file=@AquaDeck.apk" -F "platform=android" -F "note=AquaDeck build ${{ github.run_number }}" -o appetize.json
+          KEY=$(python3 -c "import json;print(json.load(open('appetize.json')).get('publicKey',''))")
+          if [ -z "$KEY" ]; then echo "Appetize upload failed:"; cat appetize.json; exit 1; fi
+          echo "## ▶ Run AquaDeck in your browser" >> $GITHUB_STEP_SUMMARY
+          echo "https://appetize.io/app/$KEY" >> $GITHUB_STEP_SUMMARY
+          echo "Appetize app: https://appetize.io/app/$KEY"
