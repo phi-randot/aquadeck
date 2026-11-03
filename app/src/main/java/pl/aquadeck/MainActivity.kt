@@ -69,6 +69,7 @@ class MainActivity : Activity() {
                 val pick = Intent(Intent.ACTION_GET_CONTENT)
                     .addCategory(Intent.CATEGORY_OPENABLE)
                     .setType("*/*")
+                    .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/gif", "image/*", "video/*", "application/octet-stream", "*/*"))
                 return try {
                     @Suppress("DEPRECATION")
                     startActivityForResult(Intent.createChooser(pick, "Choose an animation"), REQ_FILE)
@@ -154,6 +155,30 @@ class MainActivity : Activity() {
     inner class Bridge {
         @JavascriptInterface
         fun hasSession(): Boolean = media.hasSession()
+
+        /** Downloads a clip natively (no CORS limits) and hands it to the page as base64. */
+        @JavascriptInterface
+        fun download(url: String, slot: Int, name: String) {
+            Thread {
+                var b64: String? = null
+                var err: String? = null
+                try {
+                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    conn.instanceFollowRedirects = true
+                    conn.connectTimeout = 15000; conn.readTimeout = 30000
+                    conn.setRequestProperty("User-Agent", "AquaDeck/0.1 (Android)")
+                    if (conn.responseCode !in 200..299) throw Exception("HTTP " + conn.responseCode)
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    if (bytes.size > 40 * 1024 * 1024) throw Exception("file too large")
+                    b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                } catch (e: Exception) {
+                    err = e.message ?: e.javaClass.simpleName
+                }
+                val q = org.json.JSONObject.quote(name)
+                if (b64 != null) runJs("HeadUnit.loadBase64($slot,$q,'$b64',null)")
+                else runJs("HeadUnit.loadBase64($slot,$q,null," + org.json.JSONObject.quote(err) + ")")
+            }.start()
+        }
 
         @JavascriptInterface
         fun command(name: String, arg: String) {

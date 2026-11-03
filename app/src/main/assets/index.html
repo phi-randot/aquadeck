@@ -241,6 +241,7 @@
       <div class="mhead">AQUADECK SETUP <button id="mClose">✕</button></div>
       <div class="mrow"><span>Faceplate</span><div class="seg"><button data-skin="blue">Blue (P7600 style)</button><button data-skin="green">Green (P6400 style)</button></div></div>
       <div class="mrow"><span>Load clips into preset</span><div class="seg" id="mSlots"></div></div>
+      <div class="mrow"><input id="mUrl" placeholder="Paste a GIF / .lkd link" style="flex:1;min-width:180px;background:#1b1f24;color:#e6e9ec;border:1px solid #343941;border-radius:6px;padding:8px 10px;font:inherit"><button id="mUrlGo">Load from link</button></div>
       <div class="mrow"><button id="mLoad">Load animation from this device…</button><button id="mAccess" class="app-only">Media access settings</button></div>
       <div class="msub">Carozerra clip library <small>— downloaded from github.com/youxufkhan/carozerra</small></div>
       <div class="mlist" id="mList"><button id="mFetch">Show clips</button></div>
@@ -718,7 +719,7 @@ async function loadFileIntoSlot(n, blob, name, persist = true) {
       const x = c.getContext('2d'); x.drawImage(bm, 0, 0);
       sl = { kind: 'image', frames: [x.getImageData(0, 0, bm.width, bm.height)], delays: [1000] };
     }
-  } catch (e) { flash('CANNOT READ FILE', 2.2); return; }
+  } catch (e) { flash('CANNOT READ ' + (sig.replace(/[^A-Za-z0-9]/g, '') || 'FILE') + ': ' + (e && e.message || e), 4); console.error(e); return false; }
   if (slots[n]?.el) slots[n].el.remove();
   sl.name = name; sl.fi = 0; sl.acc = 0;
   if (sl.frames) { sl.mono = isMono(sl.frames); prepSlot(sl); }
@@ -726,6 +727,7 @@ async function loadFileIntoSlot(n, blob, name, persist = true) {
   S.preset = n; save(); renderPresets();
   flash('P' + n + ' ' + name.replace(/\.[^.]+$/, ''), 2);
   if (persist) dbPut(n, { name, blob });
+  return true;
 }
 fileInput.addEventListener('change', e => {
   const f = e.target.files?.[0];
@@ -924,6 +926,27 @@ document.querySelectorAll('[data-skin]').forEach(b => b.addEventListener('click'
 }));
 on('mLoad', () => { menu.hidden = true; pickFor(target); });
 on('mAccess', () => send('settings'));
+window.HeadUnit.loadBase64 = async (slot, name, b64, err) => {
+  if (err) { mStatus.textContent = 'Download failed: ' + err; return; }
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const ok = await loadFileIntoSlot(slot, new Blob([u8]), name);
+  mStatus.textContent = ok ? name + ' → preset ' + slot : 'Downloaded, but could not read it (see display).';
+  renderMenu();
+};
+on('mUrlGo', async () => {
+  const url = document.getElementById('mUrl').value.trim();
+  if (!/^https?:\/\//i.test(url)) { mStatus.textContent = 'Paste a full link starting with https://'; return; }
+  const name = decodeURIComponent(url.split('?')[0].split('/').pop() || 'clip.gif');
+  mStatus.textContent = 'Downloading ' + name + '…';
+  if (window.AndroidBridge?.download) { window.AndroidBridge.download(url, target, name); return; }
+  try {
+    const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status);
+    const ok = await loadFileIntoSlot(target, await r.blob(), name);
+    mStatus.textContent = ok ? name + ' → preset ' + target : 'Could not read that file.';
+    renderMenu();
+  } catch (e) { mStatus.textContent = 'That site does not allow direct loading here (' + e.message + '). Try the Android app, or save the file and load it from the device.'; }
+});
 on('mFetch', async () => {
   const list = document.getElementById('mList');
   mStatus.textContent = 'Loading clip list…';
