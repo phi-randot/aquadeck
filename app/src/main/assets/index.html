@@ -333,13 +333,17 @@ loadDemo(0);
 
 // ---------- bridge ----------
 function send(cmd, arg) {
-  try { if (window.AndroidBridge?.command) { window.AndroidBridge.command(cmd, arg == null ? '' : String(arg)); return true; } } catch (e) {}
+  try {
+    const live = !window.AndroidBridge?.hasSession || window.AndroidBridge.hasSession();
+    if (!live && ['prev', 'next', 'playpause', 'source'].includes(cmd)) return false;
+    if (window.AndroidBridge?.command) { window.AndroidBridge.command(cmd, arg == null ? '' : String(arg)); return true; } } catch (e) {}
   return false;
 }
 let extLevels = null, extAt = -10;
 window.HeadUnit = {
+  notice(text) { S.notice = String(text || ''); },
   setTrack(o = {}) {
-    S.external = true;
+    S.external = true; S.notice = '';
     if (o.title != null) S.title = o.title;
     if (o.artist != null) S.artist = o.artist;
     if (o.source) S.source = String(o.source).toUpperCase();
@@ -764,7 +768,7 @@ function drawPanel() {
   if (S.playing) { s.beginPath(); s.moveTo(ix, 37); s.lineTo(ix, 45); s.lineTo(ix + 6, 41); s.closePath(); s.fill(); }
   else { s.fillRect(ix, 37, 2, 8); s.fillRect(ix + 4, 37, 2, 8); }
   // row 4: marquee (title or message)
-  const line = (showMsg ? S.msg : (S.artist ? S.artist + ' - ' : '') + (S.title || '')).toUpperCase();
+  const line = (showMsg ? S.msg : (!S.external && S.notice) ? S.notice : (S.artist ? S.artist + ' - ' : '') + (S.title || '')).toUpperCase();
   const boxW = 70;
   s.save(); s.beginPath(); s.rect(PX, 52, boxW, 10); s.clip();
   const tw = s.measureText(line).width;

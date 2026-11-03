@@ -153,6 +153,9 @@ class MainActivity : Activity() {
 
     inner class Bridge {
         @JavascriptInterface
+        fun hasSession(): Boolean = media.hasSession()
+
+        @JavascriptInterface
         fun command(name: String, arg: String) {
             main.post {
                 when (name) {

@@ -42,8 +42,7 @@ class MediaBridge(private val ctx: Context, private val js: (String) -> Unit) {
     fun start() {
         if (started) { pushAll(); return }
         if (!hasAccess()) {
-            js("HeadUnit.setTrack({title:'Press OPEN and allow media access for AquaDeck',artist:'',source:'SETUP',duration:0})")
-            js("HeadUnit.setPlaying(false)")
+            js("HeadUnit.notice('DEMO - press OPEN and allow media access')")
             return
         }
         try {
@@ -51,10 +50,7 @@ class MediaBridge(private val ctx: Context, private val js: (String) -> Unit) {
             update(msm.getActiveSessions(comp))
             started = true
             handler.removeCallbacks(tick); handler.post(tick)
-            if (ctrl == null) {
-                js("HeadUnit.setTrack({title:'Start music in Tidal or Spotify',artist:'',source:'READY',duration:0})")
-                js("HeadUnit.setPlaying(false)")
-            }
+            if (ctrl == null) js("HeadUnit.notice('DEMO - start music in Tidal or Spotify')")
         } catch (e: SecurityException) {
             started = false
         }
@@ -87,6 +83,8 @@ class MediaBridge(private val ctx: Context, private val js: (String) -> Unit) {
         c?.registerCallback(callback, handler)
         pushAll()
     }
+
+    fun hasSession(): Boolean = ctrl != null
 
     fun pushAll() { pushTrack(); pushState() }
 
